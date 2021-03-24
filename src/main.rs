@@ -7,7 +7,6 @@ type Result<T> = std::result::Result<T, std::boxed::Box<dyn std::error::Error>>;
 #[tokio::main]
 async fn main() {
     println!("Hello, world!");
-    println!("Pokemon: {:#?}", describe_pokemon("ditto").await);
 }
 
 #[derive(Debug)]
@@ -135,6 +134,44 @@ mod tests {
         assert!(charizard_by_number.is_ok());
         assert_eq!(charizard_by_number.unwrap(), charizard_description);
     }
+
+    #[tokio::test]
+    async fn test_shakespearise() {
+        let cat_phrase = shakespearise("Curiosity killed the cat").await;
+        assert!(cat_phrase.is_ok());
+        assert_eq!(cat_phrase.unwrap(), "Curiosity did kill the gib");
+
+        let empty_phrase = shakespearise("").await;
+        assert!(empty_phrase.is_ok());
+        assert_eq!(empty_phrase.unwrap(), "");
+
+        let rust_phrase = shakespearise(
+            "Rust is a language empowering everyone to build reliable and efficient software.",
+        )
+        .await;
+        assert!(rust_phrase.is_ok());
+        assert_eq!(
+            rust_phrase.unwrap(),
+            "Rust is a language empowering everyone to buildeth reliable and efficient software."
+        );
+    }
 }
 
-// fn shakespearise(input: &str) -> std::result::Result<String, RequestError> {}
+async fn shakespearise(input: &str) -> Result<String> {
+    let request_url = reqwest::Url::parse_with_params(
+        "https://api.funtranslations.com/translate/shakespeare.json",
+        &[("text", input)],
+    )?;
+    let response = reqwest::get(request_url).await?;
+    let response_json: serde_json::Value = serde_json::from_str(&response.text().await?)?;
+    response_json["contents"]["translated"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or(
+            RequestError::new(
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to shakespearise the text",
+            )
+            .into(),
+        )
+}
