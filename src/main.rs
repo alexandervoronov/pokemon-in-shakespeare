@@ -1,5 +1,6 @@
 extern crate futures;
 extern crate reqwest;
+extern crate serde;
 extern crate serde_json;
 extern crate tokio;
 extern crate warp;
@@ -51,6 +52,34 @@ impl std::error::Error for RequestError {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PokemonResponse {
+    id: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct PokemonDescriptionLanguage {
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PokemonDescriptionVersion {
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PokemonDescription {
+    version: PokemonDescriptionVersion,
+    flavor_text: String,
+    language: PokemonDescriptionLanguage,
+}
+
+#[derive(serde::Deserialize)]
+struct PokemonDescriptionResponse {
+    #[serde(rename(deserialize = "flavor_text_entries"))]
+    descriptions: Vec<PokemonDescription>,
+}
+
 async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
     let pokemon_response = reqwest::get(format!(
         "https://pokeapi.co/api/v2/pokemon/{}",
@@ -66,15 +95,11 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
     }
 
     use std::io::{Error, ErrorKind};
-    let pokemon_response_json: serde_json::Value =
-        serde_json::from_str(&pokemon_response.text().await?)?;
-    let description_url = pokemon_response_json["id"]
-        .as_u64()
-        .map(|id| format!("https://pokeapi.co/api/v2/pokemon-species/{}/", id))
-        .ok_or(Error::new(
-            ErrorKind::InvalidData,
-            format!("Didn't find any form of pokemon {}", &pokemon_name),
-        ))?;
+    let pokemon_response: PokemonResponse = serde_json::from_str(&pokemon_response.text().await?)?;
+    let description_url = format!(
+        "https://pokeapi.co/api/v2/pokemon-species/{}/",
+        pokemon_response.id
+    );
 
     let description_response = reqwest::get(description_url).await?;
 
@@ -85,33 +110,22 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
         )
         .into());
     }
-    let description_response_json: serde_json::Value =
+    let description_response_json: PokemonDescriptionResponse =
         serde_json::from_str(&description_response.text().await?)?;
 
-    let descriptions = description_response_json["flavor_text_entries"]
-        .as_array()
-        .ok_or(Error::new(
-            ErrorKind::InvalidData,
-            format!("Failed to parse descriptions for pokemon {}", &pokemon_name),
-        ))?
+    let descriptions = description_response_json
+        .descriptions
         .into_iter()
-        .filter(|entry| entry["language"]["name"].as_str() == Some("en"))
+        .filter(|entry| entry.language.name == "en")
         .collect::<Vec<_>>();
 
     descriptions
         .iter()
-        .find(|entry| entry["version"]["name"].as_str() == Some("ruby"))
-        .or(descriptions.iter().max_by_key(|entry| {
-            entry["flavor_text"]
-                .as_str()
-                .map(|text| text.len())
-                .unwrap_or(0)
-        }))
-        .and_then(|entry| {
-            entry["flavor_text"]
-                .as_str()
-                .map(|desc| str::to_string(desc).replace('\n', " "))
-        })
+        .find(|entry| entry.version.name == "ruby")
+        .or(descriptions
+            .iter()
+            .max_by_key(|entry| entry.flavor_text.len()))
+        .map(|entry| entry.flavor_text.replace('\n', " "))
         .ok_or(
             Error::new(
                 ErrorKind::InvalidData,
