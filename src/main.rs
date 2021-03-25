@@ -1,12 +1,20 @@
+extern crate futures;
 extern crate reqwest;
 extern crate serde_json;
 extern crate tokio;
+extern crate warp;
 
 type Result<T> = std::result::Result<T, std::boxed::Box<dyn std::error::Error>>;
 
 #[tokio::main]
 async fn main() {
     println!("Hello, world!");
+
+    use warp::Filter;
+    let pokemon_name = warp::path::param()
+        .and(warp::get())
+        .and_then(respond_with_pokemon_in_shakespearese);
+    warp::serve(pokemon_name).run(([127, 0, 0, 1], 5000)).await;
 }
 
 #[derive(Debug)]
@@ -99,7 +107,11 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
                 .map(|text| text.len())
                 .unwrap_or(0)
         }))
-        .and_then(|entry| entry["flavor_text"].as_str().map(str::to_string))
+        .and_then(|entry| {
+            entry["flavor_text"]
+                .as_str()
+                .map(|desc| str::to_string(desc).replace('\n', " "))
+        })
         .ok_or(
             Error::new(
                 ErrorKind::InvalidData,
@@ -163,6 +175,9 @@ async fn shakespearise(input: &str) -> Result<String> {
         &[("text", input)],
     )?;
     let response = reqwest::get(request_url).await?;
+    if !response.status().is_success() {
+        return Err(RequestError::new(response.status(), "Failed to query Shakespeare API").into());
+    }
     let response_json: serde_json::Value = serde_json::from_str(&response.text().await?)?;
     response_json["contents"]["translated"]
         .as_str()
@@ -174,4 +189,44 @@ async fn shakespearise(input: &str) -> Result<String> {
             )
             .into(),
         )
+}
+
+async fn respond_with_pokemon_in_shakespearese(
+    pokemon_name: String,
+) -> std::result::Result<impl warp::Reply, warp::Rejection> {
+    use futures::future::TryFutureExt;
+    let description_result = describe_pokemon(&pokemon_name)
+        .and_then(|desc| async move {
+            shakespearise(&desc)
+                .await
+                .or_else(|err| match err.downcast_ref::<RequestError>() {
+                    Some(RequestError {
+                        status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                        ..
+                    }) => Ok(desc),
+                    _ => Err(err),
+                })
+        })
+        .await;
+    match description_result {
+        Ok(description) => Ok(http::response::Builder::new()
+            .status(200)
+            .body(description)
+            .unwrap()),
+        Err(err) => {
+            let status_code = if let Some(response_error) = err.downcast_ref::<RequestError>() {
+                response_error.status
+            } else {
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Ok(http::response::Builder::new()
+                .status(status_code)
+                .body(format!(
+                    "Error {}: {}",
+                    status_code.as_u16(),
+                    status_code.canonical_reason().unwrap_or("Unknown reason")
+                ))
+                .unwrap())
+        }
+    }
 }
