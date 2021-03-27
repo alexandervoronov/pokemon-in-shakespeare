@@ -13,7 +13,7 @@ async fn main() {
     println!("Hello, world!");
 
     warp::serve(pokemon_name_filter())
-        .run(([127, 0, 0, 1], 5000))
+        .run(([0, 0, 0, 0], 5000))
         .await;
 }
 
