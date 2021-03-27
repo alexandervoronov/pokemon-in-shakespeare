@@ -65,8 +65,13 @@ impl std::error::Error for RequestError {
 }
 
 #[derive(serde::Deserialize)]
+struct PokemonSpeciesInfo {
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
 struct PokemonResponse {
-    id: u64,
+    species: PokemonSpeciesInfo,
 }
 
 #[derive(serde::Deserialize)]
@@ -92,33 +97,49 @@ struct PokemonDescriptionResponse {
     descriptions: Vec<PokemonDescription>,
 }
 
-async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
-    let pokemon_response = reqwest::get(format!(
+// Results of Poke API queries can depend on presense or absense of trailing slash, so we better try
+// both options. For example, see
+// https://pokeapi.co/api/v2/pokemon/klink vs https://pokeapi.co/api/v2/pokemon/klink/
+// and https://pokeapi.co/api/v2/pokemon/electrode vs https://pokeapi.co/api/v2/pokemon/electrode/
+async fn query_pokemon_by_name(pokemon_name: &str) -> Result<reqwest::Response> {
+    let pokemon_request_url = format!(
         "https://pokeapi.co/api/v2/pokemon/{}",
         &pokemon_name.to_ascii_lowercase()
-    ))
-    .await?;
+    );
+    let pokemon_response = reqwest::get(&pokemon_request_url).await?;
+    if !pokemon_response.status().is_success() {
+        let url_with_trailing_slash = pokemon_request_url + "/";
+        let response_with_trailing_slash = reqwest::get(&url_with_trailing_slash).await?;
+        Ok(response_with_trailing_slash)
+    } else {
+        Ok(pokemon_response)
+    }
+}
+
+async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
+    let pokemon_response = query_pokemon_by_name(pokemon_name).await?;
     if !pokemon_response.status().is_success() {
         return Err(RequestError::new(
             pokemon_response.status(),
-            format!("Failed to get an id for pokemon {}", &pokemon_name),
+            format!(
+                "Failed to get an id for pokemon {} by url {}",
+                &pokemon_name,
+                pokemon_response.url()
+            ),
         )
         .into());
     }
 
-    use std::io::{Error, ErrorKind};
     let pokemon_response: PokemonResponse = serde_json::from_str(&pokemon_response.text().await?)?;
-    let description_url = format!(
-        "https://pokeapi.co/api/v2/pokemon-species/{}/",
-        pokemon_response.id
-    );
-
-    let description_response = reqwest::get(description_url).await?;
+    let description_response = reqwest::get(&pokemon_response.species.url).await?;
 
     if !description_response.status().is_success() {
         return Err(RequestError::new(
             description_response.status(),
-            format!("Failed to get a description for pokemon {}", &pokemon_name),
+            format!(
+                "Failed to get a description for pokemon {} by url {}",
+                &pokemon_name, &pokemon_response.species.url
+            ),
         )
         .into());
     }
@@ -139,10 +160,10 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
             .max_by_key(|entry| entry.flavor_text.len()))
         .map(|entry| entry.flavor_text.replace('\n', " "))
         .ok_or(
-            Error::new(
-                ErrorKind::InvalidData,
+            RequestError::new(
+                http::StatusCode::UNPROCESSABLE_ENTITY,
                 format!(
-                    "Failed to extract a description for pokemon {}",
+                    "Couldn't find any information about {} in English",
                     &pokemon_name
                 ),
             )
@@ -174,6 +195,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // This is flaky because of the low api limits of the service (5 requests per hour)
     async fn test_shakespearise() {
         let cat_phrase = shakespearise("Curiosity killed the cat").await;
         assert!(cat_phrase.is_ok());
@@ -240,6 +262,23 @@ mod tests {
 
         assert_eq!(
             warp::test::request()
+                .path("/electrode")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::OK
+        );
+        assert_eq!(
+            warp::test::request()
+                .path("/klink")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::OK
+        );
+
+        assert_eq!(
+            warp::test::request()
                 .path("/charizard/whatever")
                 .reply(&filter)
                 .await
@@ -266,6 +305,57 @@ mod tests {
 
     fn string_from_response(response: &http::response::Response<bytes::Bytes>) -> String {
         String::from_utf8(response.body().iter().cloned().collect::<Vec<_>>()).unwrap()
+    }
+
+    #[derive(serde::Deserialize)]
+    struct AllPokemonsResponse {
+        count: usize,
+        results: Vec<AllPokemonsResponseEntry>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct AllPokemonsResponseEntry {
+        name: String,
+        url: String,
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_examine_descriptions_of_all_pokemons() {
+        use std::collections::HashMap;
+
+        let response = reqwest::get("https://pokeapi.co/api/v2/pokemon?limit=10000")
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        let all_pokemons: AllPokemonsResponse =
+            serde_json::from_str(&response.text().await.unwrap()).unwrap();
+        assert_eq!(all_pokemons.count, all_pokemons.results.len());
+
+        use futures::stream::StreamExt;
+        let _descriptions = all_pokemons
+            .results
+            .into_iter()
+            .map(|entry| async move {
+                let description = describe_pokemon(&entry.name).await.ok();
+                println!(
+                    "Name {}, url {}, description {:?}",
+                    &entry.name, &entry.url, &description
+                );
+                (entry.name.clone(), description)
+            })
+            .collect::<futures::stream::FuturesUnordered<_>>()
+            .collect::<HashMap<_, _>>()
+            .await;
+
+        let description_count = _descriptions
+            .values()
+            .filter(|value| value.is_some())
+            .count();
+        println!(
+            "Total pokemons: {}, pokemons with description: {}",
+            all_pokemons.count, description_count
+        );
     }
 }
 
@@ -322,6 +412,7 @@ async fn respond_with_pokemon_in_shakespearese(
             .body(description)
             .unwrap(),
         Err(err) => {
+            eprintln!("Request \"{}\" failed with error {:?}", pokemon_name, &err);
             let status_code = if let Some(response_error) = err.downcast_ref::<RequestError>() {
                 response_error.status
             } else {
