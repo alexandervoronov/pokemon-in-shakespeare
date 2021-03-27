@@ -260,6 +260,17 @@ mod tests {
         assert!(mixed_description.contains("charizard"));
         assert!(mixed_description.contains("flies"));
 
+        let traliling_slash_response = warp::test::request()
+            .path("/charizard/")
+            .reply(&filter)
+            .await;
+        assert_eq!(traliling_slash_response.status(), http::StatusCode::OK);
+        // Can't expect this to be identical to charizard_description because by this time we may
+        // hit shakespeare translation api rate limit
+        let trailing_slash_description = string_from_response(&traliling_slash_response).to_lowercase();
+        assert!(trailing_slash_description.contains("charizard"));
+        assert!(trailing_slash_description.contains("flies"));
+
         assert_eq!(
             warp::test::request()
                 .path("/electrode")
