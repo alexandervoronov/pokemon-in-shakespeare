@@ -1,3 +1,4 @@
+extern crate bytes;
 extern crate futures;
 extern crate reqwest;
 extern crate serde;
@@ -11,11 +12,18 @@ type Result<T> = std::result::Result<T, std::boxed::Box<dyn std::error::Error>>;
 async fn main() {
     println!("Hello, world!");
 
+    warp::serve(pokemon_name_filter())
+        .run(([127, 0, 0, 1], 5000))
+        .await;
+}
+
+fn pokemon_name_filter(
+) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Copy {
     use warp::Filter;
-    let pokemon_name = warp::path::param()
+    warp::path::param()
+        .and(warp::path::end())
         .and(warp::get())
-        .and_then(respond_with_pokemon_in_shakespearese);
-    warp::serve(pokemon_name).run(([127, 0, 0, 1], 5000)).await;
+        .and_then(respond_with_pokemon_in_shakespearese)
 }
 
 #[derive(Debug)]
@@ -37,9 +45,9 @@ impl RequestError {
 }
 
 impl std::fmt::Display for RequestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
-            f,
+            formatter,
             "RequestError with status {} and message \"{}\"",
             self.status, &self.description
         )
@@ -180,6 +188,80 @@ mod tests {
             rust_phrase.unwrap(),
             "Rust is a language empowering everyone to buildeth reliable and efficient software."
         );
+    }
+
+    #[tokio::test]
+    async fn test_warp_filter() {
+        let filter = pokemon_name_filter();
+
+        assert!(!warp::test::request().path("/").matches(&filter).await);
+        assert_eq!(
+            warp::test::request()
+                .path("/banana")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::NOT_FOUND
+        );
+
+        assert_eq!(
+            warp::test::request()
+                .path("/ditto")
+                .method("POST")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::METHOD_NOT_ALLOWED
+        );
+
+        let charizard_response = warp::test::request()
+            .path("/charizard")
+            .reply(&filter)
+            .await;
+        assert_eq!(charizard_response.status(), http::StatusCode::OK);
+        let charizard_description = string_from_response(&charizard_response).to_lowercase();
+        assert!(charizard_description.contains("charizard"));
+        assert!(charizard_description.contains("flies"));
+
+        let mixed_case_response = warp::test::request()
+            .path("/CharIZard")
+            .reply(&filter)
+            .await;
+        assert_eq!(mixed_case_response.status(), http::StatusCode::OK);
+        // Can't expect this to be identical to charizard_description because by this time we may
+        // hit shakespeare translation api rate limit
+        let mixed_description = string_from_response(&mixed_case_response).to_lowercase();
+        assert!(mixed_description.contains("charizard"));
+        assert!(mixed_description.contains("flies"));
+
+        assert_eq!(
+            warp::test::request()
+                .path("/charizard/whatever")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            warp::test::request()
+                .path("/charizard+ditto")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            warp::test::request()
+                .path("/charizard,ditto")
+                .reply(&filter)
+                .await
+                .status(),
+            http::StatusCode::NOT_FOUND
+        );
+    }
+
+    fn string_from_response(response: &http::response::Response<bytes::Bytes>) -> String {
+        String::from_utf8(response.body().iter().cloned().collect::<Vec<_>>()).unwrap()
     }
 }
 
