@@ -1,12 +1,14 @@
 extern crate bytes;
+extern crate chashmap;
 extern crate futures;
 extern crate reqwest;
 extern crate serde;
 extern crate serde_json;
 extern crate tokio;
+extern crate url;
 extern crate warp;
 
-type Result<T> = std::result::Result<T, std::boxed::Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, RequestError>;
 
 #[tokio::main]
 async fn main() {
@@ -15,19 +17,24 @@ async fn main() {
     println!("");
     println!("  Query format: /<pokemon name>");
     println!("  For example, try `curl http://<server address>:5000/charizard`");
+    let cache = std::sync::Arc::new(ResponseCache::new());
 
-    warp::serve(pokemon_name_filter())
+    warp::serve(pokemon_name_filter(cache.clone()))
         .run(([0, 0, 0, 0], 5000))
         .await;
 }
 
 fn pokemon_name_filter(
-) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Copy {
+    cache: std::sync::Arc<ResponseCache>,
+) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     use warp::Filter;
     warp::path::param()
         .and(warp::path::end())
         .and(warp::get())
-        .and_then(respond_with_pokemon_in_shakespearese)
+        .and_then(move |param: String| {
+            let cache = cache.clone();
+            async move { respond_with_pokemon_in_shakespearese(cache, param).await }
+        })
 }
 
 #[derive(Debug)]
@@ -45,6 +52,32 @@ impl RequestError {
             status,
             description: description.into(),
         }
+    }
+
+    fn new_internal<S: std::convert::Into<String>>(description: S) -> RequestError {
+        RequestError::new(http::StatusCode::INTERNAL_SERVER_ERROR, description.into())
+    }
+}
+
+fn make_internal_error<E: std::error::Error>(error: E) -> RequestError {
+    RequestError::new_internal(format!("{:?}", error))
+}
+
+impl std::convert::From<reqwest::Error> for RequestError {
+    fn from(error: reqwest::Error) -> Self {
+        make_internal_error(error)
+    }
+}
+
+impl std::convert::From<serde_json::Error> for RequestError {
+    fn from(error: serde_json::Error) -> Self {
+        make_internal_error(error)
+    }
+}
+
+impl std::convert::From<url::ParseError> for RequestError {
+    fn from(error: url::ParseError) -> Self {
+        make_internal_error(error)
     }
 }
 
@@ -233,7 +266,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_warp_filter() {
-        let filter = pokemon_name_filter();
+        let cache = std::sync::Arc::new(ResponseCache::new());
+        let filter = pokemon_name_filter(cache.clone());
 
         assert!(!warp::test::request().path("/").matches(&filter).await);
         assert_eq!(
@@ -450,36 +484,110 @@ async fn shakespearise(input: &str) -> Result<String> {
 }
 
 async fn shakespearise_ignore_rate_limit_error(
-    pokemon_name: &str,
+    cache: std::sync::Arc<ResponseCache>,
     input_description: String,
 ) -> Result<String> {
-    shakespearise(&input_description)
-    .await
-    .or_else(|err| match err.downcast_ref::<RequestError>() {
-        Some(RequestError {
-            status: http::StatusCode::TOO_MANY_REQUESTS,
-            ..
-        }) => {
-            eprintln!(
-                "Request \"{}\" to Shakespeare translation service hit the API rate limit and will be returned untranslated",
-                pokemon_name
-            );
-            Ok(input_description)
+    cache
+        .shakespearise(&input_description)
+        .await
+        .or_else(|err| {
+            if let RequestError {
+                status: http::StatusCode::TOO_MANY_REQUESTS,
+                ..
+            } = err
+            {
+                Ok(input_description)
+            } else {
+                Err(err)
+            }
+        })
+}
+
+struct ResponseCache {
+    descriptions: chashmap::CHashMap<String, String>,
+    shakespearese: chashmap::CHashMap<String, String>,
+}
+
+impl ResponseCache {
+    fn new() -> Self {
+        const EXPECTED_CAPACITY: usize = 1200;
+        ResponseCache {
+            descriptions: chashmap::CHashMap::with_capacity(EXPECTED_CAPACITY),
+            shakespearese: chashmap::CHashMap::with_capacity(EXPECTED_CAPACITY),
         }
-        _ => Err(err),
-    })
+    }
+
+    async fn shakespearise(self: &Self, input_text: &str) -> Result<String> {
+        match self.get_cached_shakespearese(input_text) {
+            Some(shakespearese) => {
+                eprintln!("Shakespearese cache hit for \"{}\"", input_text);
+                Ok(shakespearese)
+            }
+            None => {
+                let shakespearese = shakespearise(input_text).await;
+                if let Ok(to_cache) = &shakespearese {
+                    self.cache_shakespearese(input_text.to_string(), to_cache.clone());
+                }
+                shakespearese
+            }
+        }
+    }
+
+    async fn describe_pokemon(self: &Self, pokemon_name: &str) -> Result<String> {
+        match self.get_cached_description(pokemon_name) {
+            Some(description) => {
+                eprintln!("Description cache hit for \"{}\"", pokemon_name);
+                Ok(description)
+            }
+            None => {
+                let description = describe_pokemon(&pokemon_name).await;
+                match description {
+                    Ok(desc) => {
+                        self.cache_description(pokemon_name.to_string(), desc.clone());
+                        Ok(desc)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        }
+    }
+
+    fn get_cached_description(self: &Self, pokemon_name: &str) -> Option<String> {
+        use core::ops::Deref;
+        self.descriptions
+            .get(pokemon_name)
+            .map(|lock| lock.deref().to_string())
+    }
+
+    fn cache_description(self: &Self, pokemon_name: String, description: String) {
+        self.descriptions.insert_new(pokemon_name, description);
+    }
+
+    fn get_cached_shakespearese(self: &Self, pokemon_name: &str) -> Option<String> {
+        use core::ops::Deref;
+        self.shakespearese
+            .get(pokemon_name)
+            .map(|lock| lock.deref().to_string())
+    }
+
+    fn cache_shakespearese(self: &Self, pokemon_name: String, shakespearese: String) {
+        self.shakespearese.insert_new(pokemon_name, shakespearese);
+    }
 }
 
 async fn respond_with_pokemon_in_shakespearese(
+    cache: std::sync::Arc<ResponseCache>,
     pokemon_name: String,
 ) -> std::result::Result<impl warp::Reply, warp::Rejection> {
     let request_start_time = std::time::Instant::now();
     use futures::future::TryFutureExt;
-    let pokemon_name = &pokemon_name;
-    let description_result = describe_pokemon(pokemon_name)
-        .and_then(
-            |desc| async move { shakespearise_ignore_rate_limit_error(pokemon_name, desc).await },
-        )
+    let pokemon_name = pokemon_name;
+    let description_result = cache
+        .describe_pokemon(&pokemon_name)
+        .and_then(|desc| {
+            let cache = cache.clone();
+            async move { shakespearise_ignore_rate_limit_error(cache, desc).await }
+        })
         .await
         .and_then(|description| {
             Ok(serde_json::to_string_pretty(
@@ -493,19 +601,14 @@ async fn respond_with_pokemon_in_shakespearese(
             .body(json_response)
             .unwrap(),
         Err(err) => {
-            eprintln!("Request \"{}\" failed with error {:?}", pokemon_name, &err);
-            let status_code = if let Some(response_error) = err.downcast_ref::<RequestError>() {
-                response_error.status
-            } else {
-                http::StatusCode::INTERNAL_SERVER_ERROR
-            };
+            eprintln!("Request \"{}\" failed with error {:?}", &pokemon_name, &err);
             http::response::Builder::new()
-                .status(status_code)
+                .status(err.status)
                 .header("Content-Type", "text/plain; charset=UTF-8")
                 .body(format!(
                     "Error {}: {}",
-                    status_code.as_u16(),
-                    status_code.canonical_reason().unwrap_or("Unknown reason")
+                    err.status.as_u16(),
+                    err.status.canonical_reason().unwrap_or("Unknown reason")
                 ))
                 .unwrap()
         }
