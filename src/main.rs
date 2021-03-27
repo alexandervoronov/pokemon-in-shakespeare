@@ -28,13 +28,13 @@ fn pokemon_name_filter(
 
 #[derive(Debug)]
 struct RequestError {
-    status: reqwest::StatusCode,
+    status: http::StatusCode,
     description: String,
 }
 
 impl RequestError {
     fn new<S: std::convert::Into<String>>(
-        status: reqwest::StatusCode,
+        status: http::StatusCode,
         description: S,
     ) -> RequestError {
         RequestError {
@@ -280,7 +280,7 @@ async fn shakespearise(input: &str) -> Result<String> {
         .map(str::to_string)
         .ok_or(
             RequestError::new(
-                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to shakespearise the text",
             )
             .into(),
@@ -297,7 +297,7 @@ async fn respond_with_pokemon_in_shakespearese(
                 .await
                 .or_else(|err| match err.downcast_ref::<RequestError>() {
                     Some(RequestError {
-                        status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                        status: http::StatusCode::TOO_MANY_REQUESTS,
                         ..
                     }) => Ok(desc),
                     _ => Err(err),
@@ -313,7 +313,7 @@ async fn respond_with_pokemon_in_shakespearese(
             let status_code = if let Some(response_error) = err.downcast_ref::<RequestError>() {
                 response_error.status
             } else {
-                reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                http::StatusCode::INTERNAL_SERVER_ERROR
             };
             Ok(http::response::Builder::new()
                 .status(status_code)
