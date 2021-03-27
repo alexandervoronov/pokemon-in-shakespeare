@@ -65,36 +65,51 @@ impl std::error::Error for RequestError {
 }
 
 #[derive(serde::Deserialize)]
-struct PokemonSpeciesInfo {
+struct PokeApiPokemonSpeciesInfo {
     url: String,
 }
 
 #[derive(serde::Deserialize)]
 struct PokemonResponse {
-    species: PokemonSpeciesInfo,
+    species: PokeApiPokemonSpeciesInfo,
 }
 
 #[derive(serde::Deserialize)]
-struct PokemonDescriptionLanguage {
+struct PokeApiPokemonDescriptionLanguage {
     name: String,
 }
 
 #[derive(serde::Deserialize)]
-struct PokemonDescriptionVersion {
+struct PokeApiPokemonDescriptionVersion {
     name: String,
 }
 
 #[derive(serde::Deserialize)]
-struct PokemonDescription {
-    version: PokemonDescriptionVersion,
+struct PokeApiPokemonDescription {
+    version: PokeApiPokemonDescriptionVersion,
     flavor_text: String,
-    language: PokemonDescriptionLanguage,
+    language: PokeApiPokemonDescriptionLanguage,
 }
 
 #[derive(serde::Deserialize)]
 struct PokemonDescriptionResponse {
     #[serde(rename(deserialize = "flavor_text_entries"))]
-    descriptions: Vec<PokemonDescription>,
+    descriptions: Vec<PokeApiPokemonDescription>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PokemonInShakespeareseResponse {
+    name: String,
+    description: String,
+}
+
+impl PokemonInShakespeareseResponse {
+    fn new<Name: Into<String>, Desc: Into<String>>(name: Name, description: Desc) -> Self {
+        PokemonInShakespeareseResponse {
+            name: name.into(),
+            description: description.into(),
+        }
+    }
 }
 
 // Results of Poke API queries can depend on presense or absense of trailing slash, so we better try
@@ -267,7 +282,8 @@ mod tests {
         assert_eq!(traliling_slash_response.status(), http::StatusCode::OK);
         // Can't expect this to be identical to charizard_description because by this time we may
         // hit shakespeare translation api rate limit
-        let trailing_slash_description = string_from_response(&traliling_slash_response).to_lowercase();
+        let trailing_slash_description =
+            string_from_response(&traliling_slash_response).to_lowercase();
         assert!(trailing_slash_description.contains("charizard"));
         assert!(trailing_slash_description.contains("flies"));
 
@@ -392,6 +408,27 @@ async fn shakespearise(input: &str) -> Result<String> {
         )
 }
 
+async fn shakespearise_ignore_rate_limit_error(
+    pokemon_name: &str,
+    input_description: String,
+) -> Result<String> {
+    shakespearise(&input_description)
+    .await
+    .or_else(|err| match err.downcast_ref::<RequestError>() {
+        Some(RequestError {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            ..
+        }) => {
+            eprintln!(
+                "Request \"{}\" to Shakespeare translation service hit the API rate limit and will be returned untranslated",
+                pokemon_name
+            );
+            Ok(input_description)
+        }
+        _ => Err(err),
+    })
+}
+
 async fn respond_with_pokemon_in_shakespearese(
     pokemon_name: String,
 ) -> std::result::Result<impl warp::Reply, warp::Rejection> {
@@ -399,28 +436,20 @@ async fn respond_with_pokemon_in_shakespearese(
     use futures::future::TryFutureExt;
     let pokemon_name = &pokemon_name;
     let description_result = describe_pokemon(pokemon_name)
-        .and_then(|desc| async move {
-            shakespearise(&desc)
-                .await
-                .or_else(|err| match err.downcast_ref::<RequestError>() {
-                    Some(RequestError {
-                        status: http::StatusCode::TOO_MANY_REQUESTS,
-                        ..
-                    }) => {
-                        eprintln!(
-                            "Request \"{}\" to Shakespeare translation service hit the API rate limit and will be returned untranslated",
-                            pokemon_name
-                        );
-                        Ok(desc)
-                    }
-                    _ => Err(err),
-                })
-        })
-        .await;
+        .and_then(
+            |desc| async move { shakespearise_ignore_rate_limit_error(pokemon_name, desc).await },
+        )
+        .await
+        .and_then(|description| {
+            Ok(serde_json::to_string_pretty(
+                &PokemonInShakespeareseResponse::new(pokemon_name, description),
+            )?)
+        });
     let response = match description_result {
-        Ok(description) => http::response::Builder::new()
-            .status(200)
-            .body(description)
+        Ok(json_response) => http::response::Builder::new()
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .status(http::StatusCode::OK)
+            .body(json_response)
             .unwrap(),
         Err(err) => {
             eprintln!("Request \"{}\" failed with error {:?}", pokemon_name, &err);
@@ -431,6 +460,7 @@ async fn respond_with_pokemon_in_shakespearese(
             };
             http::response::Builder::new()
                 .status(status_code)
+                .header("Content-Type", "text/plain; charset=UTF-8")
                 .body(format!(
                     "Error {}: {}",
                     status_code.as_u16(),
