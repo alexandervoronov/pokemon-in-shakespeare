@@ -10,7 +10,11 @@ type Result<T> = std::result::Result<T, std::boxed::Box<dyn std::error::Error>>;
 
 #[tokio::main]
 async fn main() {
-    println!("Hello, world!");
+    println!("");
+    println!("Pokémons in Shakespearese");
+    println!("");
+    println!("  Query format: /<pokemon name>");
+    println!("  For example, try `curl http://<server address>:5000/charizard`");
 
     warp::serve(pokemon_name_filter())
         .run(([0, 0, 0, 0], 5000))
