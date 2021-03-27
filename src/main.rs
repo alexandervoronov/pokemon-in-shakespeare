@@ -260,9 +260,19 @@ mod tests {
             .reply(&filter)
             .await;
         assert_eq!(charizard_response.status(), http::StatusCode::OK);
-        let charizard_description = string_from_response(&charizard_response).to_lowercase();
-        assert!(charizard_description.contains("charizard"));
-        assert!(charizard_description.contains("flies"));
+        let charizard_description = parse_response(&charizard_response);
+        assert!(charizard_description.is_some());
+        assert_eq!(charizard_description.as_ref().unwrap().name, "charizard");
+        assert!(charizard_description
+            .as_ref()
+            .unwrap()
+            .description
+            .contains("charizard"));
+        assert!(charizard_description
+            .as_ref()
+            .unwrap()
+            .description
+            .contains("flies"));
 
         let mixed_case_response = warp::test::request()
             .path("/CharIZard")
@@ -271,9 +281,19 @@ mod tests {
         assert_eq!(mixed_case_response.status(), http::StatusCode::OK);
         // Can't expect this to be identical to charizard_description because by this time we may
         // hit shakespeare translation api rate limit
-        let mixed_description = string_from_response(&mixed_case_response).to_lowercase();
-        assert!(mixed_description.contains("charizard"));
-        assert!(mixed_description.contains("flies"));
+        let mixed_description = parse_response(&mixed_case_response);
+        assert!(mixed_description.is_some());
+        assert_eq!(mixed_description.as_ref().unwrap().name, "charizard");
+        assert!(mixed_description
+            .as_ref()
+            .unwrap()
+            .description
+            .contains("charizard"));
+        assert!(mixed_description
+            .as_ref()
+            .unwrap()
+            .description
+            .contains("flies"));
 
         let traliling_slash_response = warp::test::request()
             .path("/charizard/")
@@ -282,10 +302,22 @@ mod tests {
         assert_eq!(traliling_slash_response.status(), http::StatusCode::OK);
         // Can't expect this to be identical to charizard_description because by this time we may
         // hit shakespeare translation api rate limit
-        let trailing_slash_description =
-            string_from_response(&traliling_slash_response).to_lowercase();
-        assert!(trailing_slash_description.contains("charizard"));
-        assert!(trailing_slash_description.contains("flies"));
+        let trailing_slash_description = parse_response(&traliling_slash_response);
+        assert!(trailing_slash_description.is_some());
+        assert_eq!(
+            trailing_slash_description.as_ref().unwrap().name,
+            "charizard"
+        );
+        assert!(trailing_slash_description
+            .as_ref()
+            .unwrap()
+            .description
+            .contains("charizard"));
+        assert!(trailing_slash_description
+            .as_ref()
+            .unwrap()
+            .description
+            .contains("flies"));
 
         assert_eq!(
             warp::test::request()
@@ -330,8 +362,17 @@ mod tests {
         );
     }
 
-    fn string_from_response(response: &http::response::Response<bytes::Bytes>) -> String {
-        String::from_utf8(response.body().iter().cloned().collect::<Vec<_>>()).unwrap()
+    fn parse_response(
+        response: &http::response::Response<bytes::Bytes>,
+    ) -> Option<PokemonInShakespeareseResponse> {
+        serde_json::from_slice(&response.body().iter().cloned().collect::<Vec<_>>())
+            .ok()
+            .map(
+                |response: PokemonInShakespeareseResponse| PokemonInShakespeareseResponse {
+                    name: response.name,
+                    description: response.description.to_lowercase(),
+                },
+            )
     }
 
     #[derive(serde::Deserialize)]
@@ -442,7 +483,7 @@ async fn respond_with_pokemon_in_shakespearese(
         .await
         .and_then(|description| {
             Ok(serde_json::to_string_pretty(
-                &PokemonInShakespeareseResponse::new(pokemon_name, description),
+                &PokemonInShakespeareseResponse::new(pokemon_name.to_lowercase(), description),
             )?)
         });
     let response = match description_result {
