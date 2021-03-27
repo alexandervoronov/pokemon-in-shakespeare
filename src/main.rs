@@ -294,8 +294,10 @@ async fn shakespearise(input: &str) -> Result<String> {
 async fn respond_with_pokemon_in_shakespearese(
     pokemon_name: String,
 ) -> std::result::Result<impl warp::Reply, warp::Rejection> {
+    let request_start_time = std::time::Instant::now();
     use futures::future::TryFutureExt;
-    let description_result = describe_pokemon(&pokemon_name)
+    let pokemon_name = &pokemon_name;
+    let description_result = describe_pokemon(pokemon_name)
         .and_then(|desc| async move {
             shakespearise(&desc)
                 .await
@@ -303,30 +305,43 @@ async fn respond_with_pokemon_in_shakespearese(
                     Some(RequestError {
                         status: http::StatusCode::TOO_MANY_REQUESTS,
                         ..
-                    }) => Ok(desc),
+                    }) => {
+                        eprintln!(
+                            "Request \"{}\" to Shakespeare translation service hit the API rate limit and will be returned untranslated",
+                            pokemon_name
+                        );
+                        Ok(desc)
+                    }
                     _ => Err(err),
                 })
         })
         .await;
-    match description_result {
-        Ok(description) => Ok(http::response::Builder::new()
+    let response = match description_result {
+        Ok(description) => http::response::Builder::new()
             .status(200)
             .body(description)
-            .unwrap()),
+            .unwrap(),
         Err(err) => {
             let status_code = if let Some(response_error) = err.downcast_ref::<RequestError>() {
                 response_error.status
             } else {
                 http::StatusCode::INTERNAL_SERVER_ERROR
             };
-            Ok(http::response::Builder::new()
+            http::response::Builder::new()
                 .status(status_code)
                 .body(format!(
                     "Error {}: {}",
                     status_code.as_u16(),
                     status_code.canonical_reason().unwrap_or("Unknown reason")
                 ))
-                .unwrap())
+                .unwrap()
         }
-    }
+    };
+    let request_duration = request_start_time.elapsed();
+    eprintln!(
+        "Request \"{}\" took {} ms",
+        &pokemon_name,
+        request_duration.as_millis()
+    );
+    Ok(response)
 }
