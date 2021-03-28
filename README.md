@@ -1,4 +1,4 @@
-= Pokémon teller in Shakespeare English =
+# Pokémon teller in Shakespeare English
 
 A web service that provides brief description of Pokémon in Shakespeare-style English.
 
@@ -12,7 +12,7 @@ For example,
 }
 ```
 
-== API ==
+## API
 
 Query:
 
@@ -30,11 +30,12 @@ Response:
 }
 ```
 
-== Build and run ==
+## Build and run
+
 You can build Pokémon teller as a native binary using [Cargo](https://doc.rust-lang.org/cargo/) or
 as a container image with a Dockerfile provided in the repo.
 
-=== Building with Cargo ===
+### Building with Cargo
 
 ```
 git clone https://github.com/alexandervoronov/pokemon-in-shakespeare
@@ -42,7 +43,7 @@ cd pokemon-in-shakespeare
 cargo run --release
 ```
 
-=== Building with Docker ===
+### Building with Docker
 
 ```
 git clone https://github.com/alexandervoronov/pokemon-in-shakespeare
@@ -51,13 +52,14 @@ docker build --tag pokemon-in-shakespeare .
 docker run -p 5000:5000 pokemon-in-shakespeare
 ```
 
-== Implementation details ==
+## Implementation details
+
 Pokémon teller is written in Rust and relies on [Poké API](https://pokeapi.co/) and
 [Shakespeare translator API](https://funtranslations.com/api/shakespeare) for the content.
 Successful responses from the content services are cached, therefore repeated requests are served
 faster.
 
-== Limitations ==
+## Limitations
 
 - The service used a fixed port 5000, which can be worked around by using a docker image and
   remapping the port
