@@ -1,6 +1,6 @@
 # Pokémon teller in Shakespeare English
 
-A web service that provides brief description of Pokémon in Shakespeare-style English.
+A web service that provides brief descriptions of Pokémon in Shakespeare-style English.
 
 For example,
 
