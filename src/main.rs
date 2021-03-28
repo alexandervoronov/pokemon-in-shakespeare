@@ -503,9 +503,10 @@ async fn shakespearise_ignore_rate_limit_error(
         })
 }
 
+type ResponseCacheMap = chashmap::CHashMap<String, String>;
 struct ResponseCache {
-    descriptions: chashmap::CHashMap<String, String>,
-    shakespearese: chashmap::CHashMap<String, String>,
+    descriptions: ResponseCacheMap,
+    shakespearese: ResponseCacheMap,
 }
 
 impl ResponseCache {
@@ -517,61 +518,61 @@ impl ResponseCache {
         }
     }
 
-    async fn shakespearise(self: &Self, input_text: &str) -> Result<String> {
-        match self.get_cached_shakespearese(input_text) {
-            Some(shakespearese) => {
-                eprintln!("Shakespearese cache hit for \"{}\"", input_text);
-                Ok(shakespearese)
+    async fn shakespearise<'input_lifetime>(
+        self: &Self,
+        input_text: &'input_lifetime str,
+    ) -> Result<String> {
+        Self::call_with_cache(
+            &self.shakespearese,
+            input_text,
+            |input: &'input_lifetime str| async move { shakespearise(input).await },
+        )
+        .await
+    }
+
+    async fn describe_pokemon<'input_lifetime>(
+        self: &Self,
+        pokemon_name: &'input_lifetime str,
+    ) -> Result<String> {
+        Self::call_with_cache(
+            &self.descriptions,
+            pokemon_name,
+            |input: &'input_lifetime str| async move { describe_pokemon(input).await },
+        )
+        .await
+    }
+
+    async fn call_with_cache<'input_lifetime, F, Future>(
+        cache_map: &ResponseCacheMap,
+        input: &'input_lifetime str,
+        obtain_value: F,
+    ) -> Result<String>
+    where
+        F: Fn(&'input_lifetime str) -> Future,
+        Future: futures::future::Future<Output = Result<String>>,
+    {
+        match Self::get_cached_value(cache_map, input) {
+            Some(value) => {
+                eprintln!("Cache hit for \"{}\"", input);
+                Ok(value)
             }
-            None => {
-                let shakespearese = shakespearise(input_text).await;
-                if let Ok(to_cache) = &shakespearese {
-                    self.cache_shakespearese(input_text.to_string(), to_cache.clone());
+            None => match obtain_value(input).await {
+                Ok(value) => {
+                    Self::put_value_in_cache(cache_map, input.to_string(), value.clone());
+                    Ok(value)
                 }
-                shakespearese
-            }
+                err => err,
+            },
         }
     }
 
-    async fn describe_pokemon(self: &Self, pokemon_name: &str) -> Result<String> {
-        match self.get_cached_description(pokemon_name) {
-            Some(description) => {
-                eprintln!("Description cache hit for \"{}\"", pokemon_name);
-                Ok(description)
-            }
-            None => {
-                let description = describe_pokemon(&pokemon_name).await;
-                match description {
-                    Ok(desc) => {
-                        self.cache_description(pokemon_name.to_string(), desc.clone());
-                        Ok(desc)
-                    }
-                    Err(err) => Err(err),
-                }
-            }
-        }
-    }
-
-    fn get_cached_description(self: &Self, pokemon_name: &str) -> Option<String> {
+    fn get_cached_value(cache: &ResponseCacheMap, key: &str) -> Option<String> {
         use core::ops::Deref;
-        self.descriptions
-            .get(pokemon_name)
-            .map(|lock| lock.deref().to_string())
+        cache.get(key).map(|lock| lock.deref().to_string())
     }
 
-    fn cache_description(self: &Self, pokemon_name: String, description: String) {
-        self.descriptions.insert_new(pokemon_name, description);
-    }
-
-    fn get_cached_shakespearese(self: &Self, pokemon_name: &str) -> Option<String> {
-        use core::ops::Deref;
-        self.shakespearese
-            .get(pokemon_name)
-            .map(|lock| lock.deref().to_string())
-    }
-
-    fn cache_shakespearese(self: &Self, pokemon_name: String, shakespearese: String) {
-        self.shakespearese.insert_new(pokemon_name, shakespearese);
+    fn put_value_in_cache(cache: &ResponseCacheMap, key: String, value: String) {
+        cache.insert_new(key, value);
     }
 }
 
