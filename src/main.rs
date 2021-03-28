@@ -15,8 +15,8 @@ async fn main() {
     println!("");
     println!("Pokémons in Shakespearese");
     println!("");
-    println!("  Query format: /<pokemon name>");
-    println!("  For example, try `curl http://<server address>:5000/charizard`");
+    println!("  Query format: /pokemon/<pokemon name>");
+    println!("  For example, try `curl http://<server address>:5000/pokemon/charizard`");
     let cache = std::sync::Arc::new(ResponseCache::new());
 
     warp::serve(pokemon_name_filter(cache.clone()))
@@ -28,7 +28,8 @@ fn pokemon_name_filter(
     cache: std::sync::Arc<ResponseCache>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     use warp::Filter;
-    warp::path::param()
+    warp::path("pokemon")
+        .and(warp::path::param::<String>())
         .and(warp::path::end())
         .and(warp::get())
         .and_then(move |param: String| {
@@ -262,9 +263,34 @@ mod tests {
         let filter = pokemon_name_filter(cache.clone());
 
         assert!(!warp::test::request().path("/").matches(&filter).await);
+        assert!(
+            !warp::test::request()
+                .path("/pokemon")
+                .matches(&filter)
+                .await
+        );
+        assert!(
+            !warp::test::request()
+                .path("/Pokemon/charizard")
+                .matches(&filter)
+                .await
+        );
+        assert!(
+            !warp::test::request()
+                .path("/banana/charizard")
+                .matches(&filter)
+                .await
+        );
+        assert!(
+            !warp::test::request()
+                .path("/pokemon/charizard/whatever")
+                .matches(&filter)
+                .await
+        );
+
         assert_eq!(
             warp::test::request()
-                .path("/banana")
+                .path("/pokemon/banana")
                 .reply(&filter)
                 .await
                 .status(),
@@ -273,7 +299,7 @@ mod tests {
 
         assert_eq!(
             warp::test::request()
-                .path("/ditto")
+                .path("/pokemon/ditto")
                 .method("POST")
                 .reply(&filter)
                 .await
@@ -282,7 +308,7 @@ mod tests {
         );
 
         let charizard_response = warp::test::request()
-            .path("/charizard")
+            .path("/pokemon/charizard")
             .reply(&filter)
             .await;
         assert_eq!(charizard_response.status(), http::StatusCode::OK);
@@ -301,7 +327,7 @@ mod tests {
             .contains("flies"));
 
         let mixed_case_response = warp::test::request()
-            .path("/CharIZard")
+            .path("/pokemon/CharIZard")
             .reply(&filter)
             .await;
         assert_eq!(mixed_case_response.status(), http::StatusCode::OK);
@@ -322,7 +348,7 @@ mod tests {
             .contains("flies"));
 
         let traliling_slash_response = warp::test::request()
-            .path("/charizard/")
+            .path("/pokemon/charizard/")
             .reply(&filter)
             .await;
         assert_eq!(traliling_slash_response.status(), http::StatusCode::OK);
@@ -347,7 +373,7 @@ mod tests {
 
         assert_eq!(
             warp::test::request()
-                .path("/electrode")
+                .path("/pokemon/electrode")
                 .reply(&filter)
                 .await
                 .status(),
@@ -355,7 +381,7 @@ mod tests {
         );
         assert_eq!(
             warp::test::request()
-                .path("/klink")
+                .path("/pokemon/klink")
                 .reply(&filter)
                 .await
                 .status(),
@@ -364,7 +390,7 @@ mod tests {
 
         assert_eq!(
             warp::test::request()
-                .path("/charizard/whatever")
+                .path("/pokemon/charizard+ditto")
                 .reply(&filter)
                 .await
                 .status(),
@@ -372,15 +398,7 @@ mod tests {
         );
         assert_eq!(
             warp::test::request()
-                .path("/charizard+ditto")
-                .reply(&filter)
-                .await
-                .status(),
-            http::StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            warp::test::request()
-                .path("/charizard,ditto")
+                .path("/pokemon/charizard,ditto")
                 .reply(&filter)
                 .await
                 .status(),
@@ -402,32 +420,32 @@ mod tests {
     }
 
     #[derive(serde::Deserialize)]
-    struct AllPokemonsResponse {
+    struct AllPokemonResponse {
         count: usize,
-        results: Vec<AllPokemonsResponseEntry>,
+        results: Vec<AllPokemonResponseEntry>,
     }
 
     #[derive(serde::Deserialize)]
-    struct AllPokemonsResponseEntry {
+    struct AllPokemonResponseEntry {
         name: String,
         url: String,
     }
 
     #[tokio::test]
     #[ignore]
-    async fn test_examine_descriptions_of_all_pokemons() {
+    async fn test_examine_descriptions_of_all_pokemon() {
         use std::collections::HashMap;
 
         let response = reqwest::get("https://pokeapi.co/api/v2/pokemon?limit=10000")
             .await
             .unwrap();
         assert!(response.status().is_success());
-        let all_pokemons: AllPokemonsResponse =
+        let all_pokemon: AllPokemonResponse =
             serde_json::from_str(&response.text().await.unwrap()).unwrap();
-        assert_eq!(all_pokemons.count, all_pokemons.results.len());
+        assert_eq!(all_pokemon.count, all_pokemon.results.len());
 
         use futures::stream::StreamExt;
-        let _descriptions = all_pokemons
+        let _descriptions = all_pokemon
             .results
             .into_iter()
             .map(|entry| async move {
@@ -447,8 +465,8 @@ mod tests {
             .filter(|value| value.is_some())
             .count();
         println!(
-            "Total pokemons: {}, pokemons with description: {}",
-            all_pokemons.count, description_count
+            "Total pokemon: {}, pokemon with description: {}",
+            all_pokemon.count, description_count
         );
     }
 

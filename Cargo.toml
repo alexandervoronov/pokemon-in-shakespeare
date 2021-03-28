@@ -1,5 +1,5 @@
 [package]
-name = "pokemons-in-shakespeare"
+name = "pokemon-in-shakespeare"
 version = "0.1.0"
 authors = ["Alexander Voronov <alexander.a.voronov@gmail.com>"]
 edition = "2018"

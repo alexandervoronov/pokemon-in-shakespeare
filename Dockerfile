@@ -15,6 +15,6 @@ WORKDIR /build
 RUN cargo build --release 
 
 FROM ubuntu:20.04
-COPY --from=builder /build/target/release/pokemons-in-shakespeare /
+COPY --from=builder /build/target/release/pokemon-in-shakespeare /
 EXPOSE 5000
-ENTRYPOINT /pokemons-in-shakespeare
+ENTRYPOINT /pokemon-in-shakespeare
