@@ -174,8 +174,7 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
                 &pokemon_name,
                 pokemon_response.url()
             ),
-        )
-        .into());
+        ));
     }
 
     let pokemon_response: PokemonResponse = serde_json::from_str(&pokemon_response.text().await?)?;
@@ -188,8 +187,7 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
                 "Failed to get a description for pokemon {} by url {}",
                 &pokemon_name, &pokemon_response.species.url
             ),
-        )
-        .into());
+        ));
     }
     let description_response_json: PokemonDescriptionResponse =
         serde_json::from_str(&description_response.text().await?)?;
@@ -207,16 +205,13 @@ async fn describe_pokemon(pokemon_name: &str) -> Result<String> {
             .iter()
             .max_by_key(|entry| entry.flavor_text.len()))
         .map(|entry| entry.flavor_text.replace('\n', " "))
-        .ok_or(
-            RequestError::new(
-                http::StatusCode::UNPROCESSABLE_ENTITY,
-                format!(
-                    "Couldn't find any information about {} in English",
-                    &pokemon_name
-                ),
-            )
-            .into(),
-        )
+        .ok_or(RequestError::new(
+            http::StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "Couldn't find any information about {} in English",
+                &pokemon_name
+            ),
+        ))
 }
 
 #[cfg(test)]
@@ -468,19 +463,19 @@ async fn shakespearise(input: &str) -> Result<String> {
     )?;
     let response = reqwest::get(request_url).await?;
     if !response.status().is_success() {
-        return Err(RequestError::new(response.status(), "Failed to query Shakespeare API").into());
+        return Err(RequestError::new(
+            response.status(),
+            "Failed to query Shakespeare API",
+        ));
     }
     let response_json: serde_json::Value = serde_json::from_str(&response.text().await?)?;
     response_json["contents"]["translated"]
         .as_str()
         .map(str::to_string)
-        .ok_or(
-            RequestError::new(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to shakespearise the text",
-            )
-            .into(),
-        )
+        .ok_or(RequestError::new(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to shakespearise the text",
+        ))
 }
 
 async fn shakespearise_ignore_rate_limit_error(
