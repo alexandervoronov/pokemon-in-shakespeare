@@ -150,10 +150,7 @@ impl PokemonInShakespeareseResponse {
 // https://pokeapi.co/api/v2/pokemon/klink vs https://pokeapi.co/api/v2/pokemon/klink/
 // and https://pokeapi.co/api/v2/pokemon/electrode vs https://pokeapi.co/api/v2/pokemon/electrode/
 async fn query_pokemon_by_name(pokemon_name: &str) -> Result<reqwest::Response> {
-    let pokemon_request_url = format!(
-        "https://pokeapi.co/api/v2/pokemon/{}",
-        &pokemon_name
-    );
+    let pokemon_request_url = format!("https://pokeapi.co/api/v2/pokemon/{}", &pokemon_name);
     let pokemon_response = reqwest::get(&pokemon_request_url).await?;
     if !pokemon_response.status().is_success() {
         let url_with_trailing_slash = pokemon_request_url + "/";
@@ -454,6 +451,31 @@ mod tests {
             all_pokemons.count, description_count
         );
     }
+
+    #[tokio::test]
+    async fn test_response_cache_methods() {
+        let cache_map = ResponseCacheMap::new();
+        assert!(ResponseCache::get_cached_value(&cache_map, "banana").is_none());
+
+        ResponseCache::put_value_in_cache(&cache_map, "banana", "yellow");
+        let cached_banana = ResponseCache::get_cached_value(&cache_map, "banana");
+        assert!(cached_banana.is_some());
+        assert_eq!(cached_banana.unwrap(), "yellow");
+    }
+
+    #[tokio::test]
+    async fn test_response_cache() {
+        let cache = ResponseCache::new();
+        assert!(cache.descriptions.is_empty());
+        let _ = cache.describe_pokemon("pikachu").await;
+        assert_eq!(cache.descriptions.len(), 1);
+        let _ = cache.describe_pokemon("charizard").await;
+        assert_eq!(cache.descriptions.len(), 2);
+        let _ = cache.describe_pokemon("charizard").await; // again
+        assert_eq!(cache.descriptions.len(), 2);
+        let _ = cache.describe_pokemon("banana").await; // error is not cached
+        assert_eq!(cache.descriptions.len(), 2);
+    }
 }
 
 async fn shakespearise(input: &str) -> Result<String> {
@@ -553,7 +575,7 @@ impl ResponseCache {
             }
             None => match obtain_value(input).await {
                 Ok(value) => {
-                    Self::put_value_in_cache(cache_map, input.to_string(), value.clone());
+                    Self::put_value_in_cache(cache_map, input, value.clone());
                     Ok(value)
                 }
                 err => err,
@@ -566,8 +588,12 @@ impl ResponseCache {
         cache.get(key).map(|lock| lock.deref().to_string())
     }
 
-    fn put_value_in_cache(cache: &ResponseCacheMap, key: String, value: String) {
-        cache.insert_new(key, value);
+    fn put_value_in_cache<Key: Into<String>, Value: Into<String>>(
+        cache: &ResponseCacheMap,
+        key: Key,
+        value: Value,
+    ) {
+        cache.insert_new(key.into(), value.into());
     }
 }
 
