@@ -612,7 +612,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_response_cache() {
+    async fn test_response_cache_not_caching_errors() {
+        let cache = ResponseCache::new();
+        assert!(cache.descriptions.is_empty());
+        let returned_content =
+            ResponseCache::call_with_cache(&cache.descriptions, "pikachu", |_| {
+                futures::future::ready(Ok("pikachu content".to_string()))
+            })
+            .await;
+        assert!(returned_content.is_ok());
+        assert_eq!(returned_content.unwrap(), "pikachu content");
+        let cached_content = ResponseCache::get_cached_value(&cache.descriptions, "pikachu");
+        assert!(cached_content.is_some());
+        assert_eq!(cached_content.unwrap(), "pikachu content");
+
+        let returned_error =
+            ResponseCache::call_with_cache(&cache.descriptions, "charizard", |_| {
+                futures::future::ready(Err(RequestError::new_internal("charizard error")))
+            })
+            .await;
+        assert!(returned_error.is_err());
+        assert_eq!(
+            returned_error.unwrap_err().status,
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let cache_response_after_error =
+            ResponseCache::get_cached_value(&cache.descriptions, "charizard");
+        assert!(cache_response_after_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_response_cache_describe_pokemon() {
         let cache = ResponseCache::new();
         assert!(cache.descriptions.is_empty());
         let _ = cache.describe_pokemon("pikachu").await;
