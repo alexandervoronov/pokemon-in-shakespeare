@@ -152,7 +152,7 @@ impl PokemonInShakespeareseResponse {
 async fn query_pokemon_by_name(pokemon_name: &str) -> Result<reqwest::Response> {
     let pokemon_request_url = format!(
         "https://pokeapi.co/api/v2/pokemon/{}",
-        &pokemon_name.to_ascii_lowercase()
+        &pokemon_name
     );
     let pokemon_response = reqwest::get(&pokemon_request_url).await?;
     if !pokemon_response.status().is_success() {
@@ -577,7 +577,7 @@ async fn respond_with_pokemon_in_shakespearese(
 ) -> std::result::Result<impl warp::Reply, warp::Rejection> {
     let request_start_time = std::time::Instant::now();
     use futures::future::TryFutureExt;
-    let pokemon_name = pokemon_name;
+    let pokemon_name = pokemon_name.to_lowercase();
     let description_result = cache
         .describe_pokemon(&pokemon_name)
         .and_then(|desc| {
@@ -587,7 +587,7 @@ async fn respond_with_pokemon_in_shakespearese(
         .await
         .and_then(|description| {
             Ok(serde_json::to_string_pretty(
-                &PokemonInShakespeareseResponse::new(pokemon_name.to_lowercase(), description),
+                &PokemonInShakespeareseResponse::new(&pokemon_name, description),
             )?)
         });
     let response = match description_result {
