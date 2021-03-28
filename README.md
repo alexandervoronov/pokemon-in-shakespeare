@@ -52,6 +52,13 @@ docker build --tag pokemon-in-shakespeare .
 docker run -p 5000:5000 pokemon-in-shakespeare
 ```
 
+## Limitations
+
+- The service used a fixed port 5000, which can be worked around by using a docker image and
+  remapping the port
+- Shakespeare translator API has quite strict request rate limit (5 per hour, 60 per day), so
+  after a few requests the Pokémon teller will switch to modern English
+
 ## Implementation details
 
 Pokémon teller is written in Rust and relies on [Poké API](https://pokeapi.co/) and
@@ -59,9 +66,24 @@ Pokémon teller is written in Rust and relies on [Poké API](https://pokeapi.c
 Successful responses from the content services are cached, therefore repeated requests are served
 faster.
 
-## Limitations
+### Potential improvements
 
-- The service used a fixed port 5000, which can be worked around by using a docker image and
-  remapping the port
-- Shakespeare translator API has quite strict request rate limit (5 per hour, 60 per day), so
-  after a few requests the Pokémon teller will switch to modern English
+- A bit of command-line configuration. First candidates are the network port and a switch for
+  passing through the `TOO_MANY_REQUESTS` error from _Shakespeare translator_ instead of returning
+  an unshakespearised test.
+- Configurable logging verbosity. Current logging is just printing to _cerr_.
+- A bit more attention to cleanup/formatting of the Pokémon descriptions. _Poké API_ often returns
+  double spaces and random Unicode characters that look weird specially when we exceed the
+  _Shakespeare translator_ request quota.
+- Spending some time on breaking the project into multiple files. The amount of code currently is
+  a bit over “fits nicely into a single file” but yet didn’t exceed “already unmanageable in a
+  single file”.
+- Seeing if switch of the docker image base to Alpine instead of Ubuntu reduces the image size
+  significantly.
+- Better separation of caching from the main logic. It's currently somewhat entangled mostly due
+  to the need of handling `TOO_MANY_REQUESTS` error from _Shakespeare translator_. Another issue
+  with the current cache implementation is that it doesn't have any size controls on the number of
+  entries or the size of an entry. So with serving more and more requests it'll eventually
+  cache 'em all.
+- Load testing and cache adjustments/rework. Without load testing it's hard to tell how good the
+  current caching is and also makes it almost pointless to try something different.
