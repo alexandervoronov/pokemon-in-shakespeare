@@ -12,9 +12,9 @@ type Result<T> = std::result::Result<T, RequestError>;
 
 #[tokio::main]
 async fn main() {
-    println!("");
+    println!();
     println!("Pokémons in Shakespearese");
-    println!("");
+    println!();
     println!("  Query format: /pokemon/<pokemon name>");
     println!("  For example, try `curl http://<server address>:5000/pokemon/charizard`");
 
@@ -281,7 +281,7 @@ impl ResponseCache {
     }
 
     async fn shakespearise<'input_lifetime>(
-        self: &Self,
+        &self,
         input_text: &'input_lifetime str,
     ) -> Result<String> {
         Self::call_with_cache(
@@ -293,7 +293,7 @@ impl ResponseCache {
     }
 
     async fn describe_pokemon<'input_lifetime>(
-        self: &Self,
+        &self,
         pokemon_name: &'input_lifetime str,
     ) -> Result<String> {
         Self::call_with_cache(
@@ -339,6 +339,44 @@ impl ResponseCache {
         value: Value,
     ) {
         cache.insert_new(key.into(), value.into());
+    }
+}
+
+fn make_internal_error<E: std::error::Error>(error: E) -> RequestError {
+    RequestError::new_internal(format!("{:?}", error))
+}
+
+impl std::convert::From<reqwest::Error> for RequestError {
+    fn from(error: reqwest::Error) -> Self {
+        make_internal_error(error)
+    }
+}
+
+impl std::convert::From<serde_json::Error> for RequestError {
+    fn from(error: serde_json::Error) -> Self {
+        make_internal_error(error)
+    }
+}
+
+impl std::convert::From<url::ParseError> for RequestError {
+    fn from(error: url::ParseError) -> Self {
+        make_internal_error(error)
+    }
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "RequestError with status {} and message \"{}\"",
+            self.status, &self.description
+        )
+    }
+}
+
+impl std::error::Error for RequestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
     }
 }
 
@@ -653,43 +691,5 @@ mod tests {
         assert_eq!(cache.descriptions.len(), 2);
         let _ = cache.describe_pokemon("banana").await; // error is not cached
         assert_eq!(cache.descriptions.len(), 2);
-    }
-}
-
-fn make_internal_error<E: std::error::Error>(error: E) -> RequestError {
-    RequestError::new_internal(format!("{:?}", error))
-}
-
-impl std::convert::From<reqwest::Error> for RequestError {
-    fn from(error: reqwest::Error) -> Self {
-        make_internal_error(error)
-    }
-}
-
-impl std::convert::From<serde_json::Error> for RequestError {
-    fn from(error: serde_json::Error) -> Self {
-        make_internal_error(error)
-    }
-}
-
-impl std::convert::From<url::ParseError> for RequestError {
-    fn from(error: url::ParseError) -> Self {
-        make_internal_error(error)
-    }
-}
-
-impl std::fmt::Display for RequestError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "RequestError with status {} and message \"{}\"",
-            self.status, &self.description
-        )
-    }
-}
-
-impl std::error::Error for RequestError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
     }
 }
